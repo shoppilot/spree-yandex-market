@@ -5,21 +5,21 @@ module Export
   class YandexMarketExporter
     include Spree::Core::Engine.routes.url_helpers
     attr_accessor :host, :currencies
-    
+
     DEFAULT_OFFER = "simple"
 
     def helper
       @helper ||= ApplicationController.helpers
     end
-    
+
     def export
       @config = Spree::YandexMarket::Config
       @host = @config.preferred_url.sub(%r[^http://],'').sub(%r[/$], '')
       ActionController::Base.asset_host = @config.preferred_url
-      
+
       @currencies = @config.preferred_currency.split(';').map{|x| x.split(':')}
       @currencies.first[1] = 1
-      
+
       # Nokogiri::XML::Builder.new({ :encoding =>"utf-8"}, SCHEME) do |xml|
       Nokogiri::XML::Builder.new(:encoding =>"utf-8") do |xml|
         xml.doc.create_internal_subset('yml_catalog',
@@ -28,20 +28,20 @@ module Export
                                        )
 
         xml.yml_catalog(:date => Time.now.to_s(:ym)) {
-          
+
           xml.shop { # описание магазина
             xml.name    @config.preferred_short_name
             xml.company @config.preferred_full_name
             xml.url     path_to_url('')
-            
+
             xml.currencies { # описание используемых валют в магазине
               @currencies && @currencies.each do |curr|
                 opt = {:id => curr.first, :rate => curr[1] }
                 opt.merge!({ :plus => curr[2]}) if curr[2] && ["CBRF","NBU","NBK","CB"].include?(curr[1])
                 xml.currency(opt)
               end
-            }        
-            
+            }
+
             xml.categories { # категории товара
               Spree::Taxonomy.all.each do |taxonomy|
                 taxonomy.root.self_and_descendants.each do |cat|
@@ -60,12 +60,12 @@ module Export
               end
             }
           }
-        } 
+        }
       end.to_xml
-      
+
     end
-    
-    
+
+
     private
     # :type => "book"
     # :type => "audiobook"
@@ -73,23 +73,23 @@ module Export
     # :type => video
     # :type => tour
     # :type => event_ticket
-    
+
     def path_to_url(path)
       "http://#{@host.sub(%r[^http://],'')}/#{path.sub(%r[^/],'')}"
     end
-    
+
     def offer(xml,product, cat)
-      
+
       product_properties = { }
       product.product_properties.map {|x| product_properties[x.property_name] = x.value }
       wares_type_value = product_properties[@config.preferred_wares_type]
       if ["book", "audiobook", "music", "video", "tour", "event_ticket", "vendor_model"].include? wares_type_value
         send("offer_#{wares_type_value}".to_sym, xml, product, cat)
       else
-        send("offer_#{DEFAULT_OFFER}".to_sym, xml, product, cat)      
+        send("offer_#{DEFAULT_OFFER}".to_sym, xml, product, cat)
       end
     end
-    
+
     # общая часть для всех видов продукции
     def shared_xml(xml, product, cat)
       xml.url product_url(product, :host => @host)
@@ -99,12 +99,12 @@ module Export
       xml.picture path_to_url(CGI.escape(product.images.first.attachment.url(:product, false))) unless product.images.empty?
     end
 
-    
+
     # Обычное описание
     def offer_vendor_model(xml,product, cat)
       product_properties = { }
       product.product_properties.map {|x| product_properties[x.property_name] = x.value }
-      opt = { :id => product.id, :type => "vendor.model", :available => (@config.preferred_only_backorder ? false : product.has_stock?) }
+      opt = { :id => product.id, :type => "vendor.model", :available => (@config.preferred_only_backorder ? false : product.total_on_hand > 0) }
       xml.offer(opt) {
         shared_xml(xml, product, cat)
         # xml.delivery               !product.shipping_category.blank?
@@ -119,7 +119,7 @@ module Export
         xml.model                  product_properties[@config.preferred_model] if product_properties[@config.preferred_model]
         xml.description            product.description if product.description
         xml.sales_notes            @config.preferred_sales_notes unless @config.preferred_sales_notes.blank?
-        xml.manufacturer_warranty  !product_properties[@config.preferred_manufacturer_warranty].blank? 
+        xml.manufacturer_warranty  !product_properties[@config.preferred_manufacturer_warranty].blank?
         xml.country_of_origin      product_properties[@config.preferred_country_of_manufacturer] if product_properties[@config.preferred_country_of_manufacturer]
         xml.downloadable           false
       }
@@ -129,7 +129,7 @@ module Export
     def offer_simple(xml, product, cat)
       product_properties = { }
       product.product_properties.map {|x| product_properties[x.property_name] = x.value }
-      opt = { :id => product.id,  :available => (@config.preferred_only_backorder ? false : product.has_stock?) }
+      opt = { :id => product.id,  :available => (@config.preferred_only_backorder ? false : product.total_on_hand > 0) }
       xml.offer(opt) {
         shared_xml(xml, product, cat)
         xml.delivery            true if not @config.preferred_without_order_form
@@ -140,21 +140,21 @@ module Export
         xml.description         product.description
         xml.sales_notes         @config.preferred_sales_notes unless @config.preferred_sales_notes.blank?
         xml.country_of_origin   product_properties[@config.preferred_country_of_manufacturer] if product_properties[@config.preferred_country_of_manufacturer]
-        xml.downloadable false   
+        xml.downloadable false
       }
     end
-    
+
     # Книги
     def offer_book(xml, product, cat)
       product_properties = { }
       product.product_properties.map {|x| product_properties[x.property_name] = x.value }
-      opt = { :id => product.id, :type => "book", :available => product.has_stock? }
+      opt = { :id => product.id, :type => "book", :available => product.total_on_hand > 0 }
       xml.offer(opt) {
         shared_xml(xml, product, cat)
-        
+
         xml.delivery true if not @config.preferred_without_order_form
         xml.local_delivery_cost @config.preferred_local_delivery_cost unless @config.preferred_local_delivery_cost.blank?
-        
+
         xml.author product_properties[@config.preferred_author]
         xml.name product.name
         xml.publisher product_properties[@config.preferred_publisher]
@@ -164,24 +164,24 @@ module Export
         xml.volume product_properties[@config.preferred_volume]
         xml.part product_properties[@config.preferred_part]
         xml.language product_properties[@config.preferred_language]
-        
+
         xml.binding product_properties[@config.preferred_binding]
         xml.page_extent product_properties[@config.preferred_page_extent]
-        
+
         xml.description product.description
         xml.sales_notes @config.preferred_sales_notes unless @config.preferred_sales_notes.blank?
         xml.downloadable false
       }
     end
-    
+
     # Аудиокниги
     def offer_audiobook(xml, product, cat)
       product_properties = { }
-      product.product_properties.map {|x| product_properties[x.property_name] = x.value }      
-      opt = { :id => product.id, :type => "audiobook", :available => product.has_stock?  }
-      xml.offer(opt) {  
+      product.product_properties.map {|x| product_properties[x.property_name] = x.value }
+      opt = { :id => product.id, :type => "audiobook", :available => product.total_on_hand > 0  }
+      xml.offer(opt) {
         shared_xml(xml, product, cat)
-        
+
         xml.author product_properties[@config.preferred_author]
         xml.name product.name
         xml.publisher product_properties[@config.preferred_publisher]
@@ -191,45 +191,45 @@ module Export
         xml.volume product_properties[@config.preferred_volume]
         xml.part product_properties[@config.preferred_part]
         xml.language product_properties[@config.preferred_language]
-        
+
         xml.performed_by product_properties[@config.preferred_performed_by]
         xml.storage product_properties[@config.preferred_storage]
         xml.format product_properties[@config.preferred_format]
         xml.recording_length product_properties[@config.preferred_recording_length]
         xml.description product.description
         xml.downloadable true
-        
+
       }
     end
-    
+
     # Описание музыкальной продукции
     def offer_music(xml, product, cat)
       product_properties = { }
       product.product_properties.map {|x| product_properties[x.property_name] = x.value }
-      opt = { :id => product.id, :type => "artist.title", :available => product.has_stock?  }
+      opt = { :id => product.id, :type => "artist.title", :available => product.total_on_hand > 0  }
       xml.offer(opt) {
         shared_xml(xml, product, cat)
         xml.delivery true if not @config.preferred_without_order_form
 
-        
+
         xml.artist product_properties[@config.preferred_artist]
         xml.title  product_properties[@config.preferred_title]
         xml.year   product_properties[@config.preferred_music_video_year]
         xml.media  product_properties[@config.preferred_media]
-        
+
         xml.description product.description
-        
+
       }
     end
-    
+
     # Описание видео продукции:
     def offer_video(xml, product, cat)
       product_properties = { }
       product.product_properties.map {|x| product_properties[x.property_name] = x.value }
-      opt = { :id => product.id, :type => "artist.title", :available => product.has_stock?  }
+      opt = { :id => product.id, :type => "artist.title", :available => product.total_on_hand > 0  }
       xml.offer(opt) {
         shared_xml(xml, product, cat)
-        
+
         xml.delivery true if not @config.preferred_without_order_form
         xml.title             product_properties[@config.preferred_title]
         xml.year              product_properties[@config.preferred_music_video_year]
@@ -241,15 +241,15 @@ module Export
         xml.description product_url.description
       }
     end
-    
+
     # Описание тура
     def offer_tour(xml, product, cat)
       product_properties = { }
       product.product_properties.map {|x| product_properties[x.property_name] = x.value }
-      opt = { :id => product.id, :type => "tour", :available => product.has_stock?  }
+      opt = { :id => product.id, :type => "tour", :available => product.total_on_hand > 0  }
       xml.offer(opt) {
         shared_xml(xml, product, cat)
-        
+
         xml.delivery true if not @config.preferred_without_order_form
         xml.local_delivery_cost @config.preferred_local_delivery_cost unless @config.preferred_local_delivery_cost.blank?
         xml.worldRegion ""
@@ -268,12 +268,12 @@ module Export
         xml.sales_notes @config.sales_notes unless @config.preferred_sales_notes.blank?
       }
     end
-    
+
     # Описание билетов на мероприятия
     def offer_event_ticket(xml, product, cat)
       product_properties = { }
-      product.product_properties.map {|x| product_properties[x.property_name] = x.value }      
-      opt = { :id => product.id, :type => "event-ticket", :available => product.has_stock?  }    
+      product.product_properties.map {|x| product_properties[x.property_name] = x.value }
+      opt = { :id => product.id, :type => "event-ticket", :available => product.total_on_hand > 0  }
       xml.offer(opt) {
         shared_xml(xml, product, cat)
         xml.delivery true if not @config.preferred_without_order_form
@@ -282,12 +282,12 @@ module Export
         xml.place product_properties[@config.preferred_place]
         xml.hall(:plan => product_properties[@config.preferred_hall_url_plan]) { xml << product_properties[@config.preferred_hall] }
         xml.date product_properties[@config.preferred_event_date]
-        xml.is_premiere !product_properties[@config.preferred_is_premiere].blank? 
-        xml.is_kids !product_properties[@config.preferred_is_kids].blank? 
+        xml.is_premiere !product_properties[@config.preferred_is_premiere].blank?
+        xml.is_kids !product_properties[@config.preferred_is_kids].blank?
         xml.description product.description
         xml.sales_notes @config.preferred_sales_notes unless @config.preferred_sales_notes.blank?
       }
     end
-    
+
   end
 end
